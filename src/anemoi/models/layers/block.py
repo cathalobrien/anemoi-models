@@ -30,6 +30,8 @@ from anemoi.models.layers.conv import GraphConv
 from anemoi.models.layers.conv import GraphTransformerConv
 from anemoi.models.layers.mlp import MLP
 
+import transformer_engine.pytorch as te
+
 LOGGER = logging.getLogger(__name__)
 
 
@@ -64,8 +66,10 @@ class TransformerProcessorBlock(BaseBlock):
             LOGGER.error("Activation function %s not supported", activation)
             raise RuntimeError from ae
 
-        self.layer_norm1 = nn.LayerNorm(num_channels)
+        self.norm='RMSNorm'
 
+
+        self.layer_norm1 = te.LayerNorm(num_channels)
         self.attention = MultiHeadSelfAttention(
             num_heads=num_heads,
             embed_dim=num_channels,
@@ -74,20 +78,34 @@ class TransformerProcessorBlock(BaseBlock):
             is_causal=False,
             dropout=0.0,
         )
+        attention_te=te.MultiheadAttention(
+                hidden_size=num_channels,
+                num_attention_heads=num_heads,
+                window_size=(window_size,window_size),
+                input_layernorm=True, 
+                normalization=self.norm,
+                attention_type="self",
+                attn_mask_type="no_mask",
+                attention_dropout=0.0,
+                bias=False,
+                )
+        #self.attention=attention_te
 
-        self.mlp = nn.Sequential(
-            nn.Linear(num_channels, hidden_dim),
-            act_func(),
-            nn.Linear(hidden_dim, num_channels),
-        )
-        self.layer_norm2 = nn.LayerNorm(num_channels)
+        #self.mlp = nn.Sequential(
+        #    nn.Linear(num_channels, hidden_dim),
+        #    act_func(),
+        #    nn.Linear(hidden_dim, num_channels),
+        #)
+        self.mlp = te.LayerNormMLP(num_channels, hidden_dim, normalization=self.norm, activation="gelu")
 
     def forward(
         self, x: Tensor, shapes: list, batch_size: int, model_comm_group: Optional[ProcessGroup] = None
     ) -> Tensor:
         # Need to be out of place for gradient propagation
+        #x = x + self.attention(x, shapes, batch_size, model_comm_group=model_comm_group)
         x = x + self.attention(self.layer_norm1(x), shapes, batch_size, model_comm_group=model_comm_group)
-        x = x + self.mlp(self.layer_norm2(x))
+        #x = x + self.attention(x)
+        x = x + self.mlp(x)
         return x
 
 
@@ -316,15 +334,18 @@ class GraphTransformerBaseBlock(BaseBlock, ABC):
 
         self.num_chunks = num_chunks
 
-        self.lin_key = nn.Linear(in_channels, num_heads * self.out_channels_conv)
-        self.lin_query = nn.Linear(in_channels, num_heads * self.out_channels_conv)
-        self.lin_value = nn.Linear(in_channels, num_heads * self.out_channels_conv)
-        self.lin_self = nn.Linear(in_channels, num_heads * self.out_channels_conv, bias=bias)
-        self.lin_edge = nn.Linear(edge_dim, num_heads * self.out_channels_conv)  # , bias=False)
+        self.lin_key = te.Linear(in_channels, num_heads * self.out_channels_conv)
+        self.lin_query = te.Linear(in_channels, num_heads * self.out_channels_conv)
+        self.lin_value = te.Linear(in_channels, num_heads * self.out_channels_conv)
+        self.lin_self = te.Linear(in_channels, num_heads * self.out_channels_conv, bias=bias)
+        self.lin_edge = te.Linear(edge_dim, num_heads * self.out_channels_conv)  # , bias=False)
 
         self.conv = GraphTransformerConv(out_channels=self.out_channels_conv)
 
-        self.projection = nn.Linear(out_channels, out_channels)
+        self.projection = te.Linear(out_channels, out_channels)
+
+        #self.norm='LayerNorm'
+        self.norm='RMSNorm'
 
         try:
             act_func = getattr(nn, activation)
@@ -332,22 +353,24 @@ class GraphTransformerBaseBlock(BaseBlock, ABC):
             LOGGER.error("Activation function %s not supported", activation)
             raise RuntimeError from ae
 
-        self.node_dst_mlp = nn.Sequential(
-            nn.LayerNorm(out_channels),
-            nn.Linear(out_channels, hidden_dim),
-            act_func(),
-            nn.Linear(hidden_dim, out_channels),
-        )
+        #self.node_dst_mlp = nn.Sequential(
+        #    nn.LayerNorm(out_channels),
+        #    nn.Linear(out_channels, hidden_dim),
+        #    act_func(),
+        #    nn.Linear(hidden_dim, out_channels),
+        #)
+        self.node_dst_mlp = te.LayerNormMLP(out_channels, hidden_dim, normalization=self.norm, activation="gelu")
 
-        self.layer_norm1 = nn.LayerNorm(in_channels)
+        self.layer_norm1 = te.LayerNorm(in_channels)
 
         if self.update_src_nodes:
-            self.node_src_mlp = nn.Sequential(
-                nn.LayerNorm(out_channels),
-                nn.Linear(out_channels, hidden_dim),
-                act_func(),
-                nn.Linear(hidden_dim, out_channels),
-            )
+            #self.node_src_mlp = nn.Sequential(
+            #    nn.LayerNorm(out_channels),
+            #    nn.Linear(out_channels, hidden_dim),
+            #    act_func(),
+            #    nn.Linear(hidden_dim, out_channels),
+            #)
+            self.node_src_mlp = te.LayerNormMLP(out_channels, hidden_dim, normalization=self.norm, activation="gelu")
 
     def shard_qkve_heads(
         self,
@@ -460,7 +483,7 @@ class GraphTransformerMapperBlock(GraphTransformerBaseBlock):
             **kwargs,
         )
 
-        self.layer_norm2 = nn.LayerNorm(in_channels)
+        self.layer_norm2 = te.LayerNorm(in_channels)
 
     def forward(
         self,

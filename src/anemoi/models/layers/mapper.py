@@ -31,6 +31,8 @@ from anemoi.models.layers.block import GraphTransformerMapperBlock
 from anemoi.models.layers.graph import TrainableTensor
 from anemoi.models.layers.mlp import MLP
 
+import transformer_engine.pytorch as te
+
 LOGGER = logging.getLogger(__name__)
 
 
@@ -239,7 +241,7 @@ class GraphTransformerBaseMapper(GraphEdgeMixin, BaseMapper):
 
         self.offload_layers(cpu_offload)
 
-        self.emb_nodes_dst = nn.Linear(self.in_channels_dst, self.hidden_dim)
+        self.emb_nodes_dst = te.Linear(self.in_channels_dst, self.hidden_dim)
 
     def forward(
         self,
@@ -331,7 +333,7 @@ class GraphTransformerForwardMapper(ForwardMapperPreProcessMixin, GraphTransform
             dst_grid_size=dst_grid_size,
         )
 
-        self.emb_nodes_src = nn.Linear(self.in_channels_src, self.hidden_dim)
+        self.emb_nodes_src = te.Linear(self.in_channels_src, self.hidden_dim)
 
     def forward(
         self,
@@ -405,7 +407,7 @@ class GraphTransformerBackwardMapper(BackwardMapperPostProcessMixin, GraphTransf
         )
 
         self.node_data_extractor = nn.Sequential(
-            nn.LayerNorm(self.hidden_dim), nn.Linear(self.hidden_dim, self.out_channels_dst)
+            te.LayerNormLinear(self.hidden_dim, self.out_channels_dst, normalization="RMSNorm")
         )
 
     def pre_process(self, x, shard_shapes, model_comm_group=None):
