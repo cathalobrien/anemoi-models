@@ -137,7 +137,7 @@ class _SplitHeadsParallelSection(torch.autograd.Function):
         ctx.shapes = shapes_
         ctx.comm_group = mgroup_
         if mgroup_:
-            return _headsalltoall(input_, shapes_, group=mgroup_)
+            return _headsalltoall(input_, shapes_, group=mgroup_) #getting ooms at 9km, depending on num_channels
         return input_
 
     @staticmethod

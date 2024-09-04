@@ -119,6 +119,8 @@ class GraphTransformerConv(MessagePassing):
 
         return out
 
+    #Getting OOMs at 9km here
+    @torch.compile
     def message(
         self,
         heads: int,
@@ -131,11 +133,11 @@ class GraphTransformerConv(MessagePassing):
         size_i: Optional[int],
     ) -> Tensor:
         if edge_attr is not None:
-            key_j = key_j + edge_attr
+            key_j = key_j + edge_attr #getting OOMS here
 
         alpha = (query_i * key_j).sum(dim=-1) / self.out_channels**0.5
 
         alpha = softmax(alpha, index, ptr, size_i)
         alpha = dropout(alpha, p=self.dropout, training=self.training)
 
-        return (value_j + edge_attr) * alpha.view(-1, heads, 1)
+        return (value_j + edge_attr) * alpha.view(-1, heads, 1) #and getting ooms here

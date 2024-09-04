@@ -30,6 +30,8 @@ from anemoi.models.layers.conv import GraphConv
 from anemoi.models.layers.conv import GraphTransformerConv
 from anemoi.models.layers.mlp import MLP
 
+import transformer_engine.pytorch as te
+
 LOGGER = logging.getLogger(__name__)
 
 
@@ -332,12 +334,13 @@ class GraphTransformerBaseBlock(BaseBlock, ABC):
             LOGGER.error("Activation function %s not supported", activation)
             raise RuntimeError from ae
 
-        self.node_dst_mlp = nn.Sequential(
-            nn.LayerNorm(out_channels),
-            nn.Linear(out_channels, hidden_dim),
-            act_func(),
-            nn.Linear(hidden_dim, out_channels),
-        )
+        #self.node_dst_mlp = nn.Sequential(
+        #    nn.LayerNorm(out_channels),
+        #    nn.Linear(out_channels, hidden_dim),
+        #    act_func(),
+        #    nn.Linear(hidden_dim, out_channels),
+        #)
+        self.node_dst_mlp = te.LayerNormMLP(out_channels, hidden_dim, normalization='RMSNorm', activation="gelu") #, params_dtype=torch.float16)
 
         self.layer_norm1 = nn.LayerNorm(in_channels)
 
@@ -495,6 +498,7 @@ class GraphTransformerMapperBlock(GraphTransformerBaseBlock):
         out = self.projection(out + x_r)
 
         out = out + x_skip[1]
+        #with te.fp8_autocast(enabled=True): #a100 doesnt support
         nodes_new_dst = self.node_dst_mlp(out) + out
 
         nodes_new_src = self.node_src_mlp(x_skip[0]) + x_skip[0] if self.update_src_nodes else x_skip[0]
@@ -584,6 +588,7 @@ class GraphTransformerProcessorBlock(GraphTransformerBaseBlock):
         out = self.projection(out + x_r)
 
         out = out + x_skip
+        #with te.fp8_autocast(enabled=True): #a100 doesnt support
         nodes_new = self.node_dst_mlp(out) + out
 
         return nodes_new, edge_attr
