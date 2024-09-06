@@ -67,7 +67,9 @@ class TransformerProcessorBlock(BaseBlock):
             raise RuntimeError from ae
 
         self.norm='RMSNorm'
+        self.window_size=window_size
 
+        #print(f"{num_heads=}, {num_channels=}, {window_size=}")
 
         self.layer_norm1 = te.LayerNorm(num_channels)
         self.attention = MultiHeadSelfAttention(
@@ -78,7 +80,7 @@ class TransformerProcessorBlock(BaseBlock):
             is_causal=False,
             dropout=0.0,
         )
-        attention_te=te.MultiheadAttention(
+        self.attention_te=te.MultiheadAttention(
                 hidden_size=num_channels,
                 num_attention_heads=num_heads,
                 window_size=(window_size,window_size),
@@ -88,6 +90,7 @@ class TransformerProcessorBlock(BaseBlock):
                 attn_mask_type="no_mask",
                 attention_dropout=0.0,
                 bias=False,
+                num_gqa_groups=num_heads,
                 )
         #self.attention=attention_te
 
@@ -102,9 +105,12 @@ class TransformerProcessorBlock(BaseBlock):
         self, x: Tensor, shapes: list, batch_size: int, model_comm_group: Optional[ProcessGroup] = None
     ) -> Tensor:
         # Need to be out of place for gradient propagation
-        #x = x + self.attention(x, shapes, batch_size, model_comm_group=model_comm_group)
-        x = x + self.attention(self.layer_norm1(x), shapes, batch_size, model_comm_group=model_comm_group)
-        #x = x + self.attention(x)
+                #window_size=(self.window_size,self.window_size)
+        #print(f"{x=}, {x.shape=}, {shapes=}")
+        self.attention_te.set_tensor_parallel_group(tp_group=model_comm_group)
+        x = x + self.attention_te(x).squeeze(1) #output shape without squeeze is [shapes[0], 1, shapes[1]]
+                #tp_group=model_comm_group, #have to shard heads amongst devices within
+        #x = x + self.attention(self.layer_norm1(x), shapes, batch_size, model_comm_group=model_comm_group)
         x = x + self.mlp(x)
         return x
 
