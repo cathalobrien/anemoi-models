@@ -120,7 +120,7 @@ class GraphTransformerConv(MessagePassing):
         return out
 
     #Getting OOMs at 9km here
-    @torch.compile
+    #@torch.compile #fixes ooms but gives errors in bw pass, maybe cant handle softmax? outputs/9km/4n_1024c_60%Mem_16procHeads.7430508.out
     def message(
         self,
         heads: int,

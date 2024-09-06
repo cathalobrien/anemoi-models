@@ -30,7 +30,7 @@ from anemoi.models.layers.conv import GraphConv
 from anemoi.models.layers.conv import GraphTransformerConv
 from anemoi.models.layers.mlp import MLP
 
-import transformer_engine.pytorch as te
+#import transformer_engine.pytorch as te
 
 LOGGER = logging.getLogger(__name__)
 
@@ -334,13 +334,13 @@ class GraphTransformerBaseBlock(BaseBlock, ABC):
             LOGGER.error("Activation function %s not supported", activation)
             raise RuntimeError from ae
 
-        #self.node_dst_mlp = nn.Sequential(
-        #    nn.LayerNorm(out_channels),
-        #    nn.Linear(out_channels, hidden_dim),
-        #    act_func(),
-        #    nn.Linear(hidden_dim, out_channels),
-        #)
-        self.node_dst_mlp = te.LayerNormMLP(out_channels, hidden_dim, normalization='RMSNorm', activation="gelu") #, params_dtype=torch.float16)
+        self.node_dst_mlp = nn.Sequential(
+            nn.LayerNorm(out_channels),
+            nn.Linear(out_channels, hidden_dim),
+            act_func(),
+            nn.Linear(hidden_dim, out_channels),
+        )
+        #self.node_dst_mlp = te.LayerNormMLP(out_channels, hidden_dim, normalization='RMSNorm', activation="gelu") #, params_dtype=torch.float16)
 
         self.layer_norm1 = nn.LayerNorm(in_channels)
 
