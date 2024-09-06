@@ -67,9 +67,6 @@ class TransformerProcessorBlock(BaseBlock):
             raise RuntimeError from ae
 
         self.norm='RMSNorm'
-        self.window_size=window_size
-
-        #print(f"{num_heads=}, {num_channels=}, {window_size=}")
 
         self.layer_norm1 = te.LayerNorm(num_channels)
         self.attention = MultiHeadSelfAttention(
@@ -90,7 +87,21 @@ class TransformerProcessorBlock(BaseBlock):
                 attn_mask_type="no_mask",
                 attention_dropout=0.0,
                 bias=False,
-                num_gqa_groups=num_heads,
+                num_gqa_groups=num_heads, #not sure about this
+                )
+
+        self.te_layer=te.TransformerLayer(
+                hidden_size=num_channels,
+                ffn_hidden_size=hidden_dim,
+                num_attention_heads=num_heads,
+                num_gqa_groups=num_heads, #not sure about this
+                attention_dropout=0.0,
+                bias=False,
+                self_attn_mask_type="no_mask",
+                window_size=(window_size,window_size),
+                normalization=self.norm,
+                activation="gelu",
+                hidden_dropout=0.0,
                 )
         #self.attention=attention_te
 
@@ -105,13 +116,13 @@ class TransformerProcessorBlock(BaseBlock):
         self, x: Tensor, shapes: list, batch_size: int, model_comm_group: Optional[ProcessGroup] = None
     ) -> Tensor:
         # Need to be out of place for gradient propagation
-                #window_size=(self.window_size,self.window_size)
-        #print(f"{x=}, {x.shape=}, {shapes=}")
+        #LOGGER.disabled = True
+        #TODO disable logging which spams that it uses Flash attention as backend
         self.attention_te.set_tensor_parallel_group(tp_group=model_comm_group)
         x = x + self.attention_te(x).squeeze(1) #output shape without squeeze is [shapes[0], 1, shapes[1]]
-                #tp_group=model_comm_group, #have to shard heads amongst devices within
-        #x = x + self.attention(self.layer_norm1(x), shapes, batch_size, model_comm_group=model_comm_group)
         x = x + self.mlp(x)
+        #LOGGER.disabled = False
+        #x = x + self.te_layer(x).squeeze(1)
         return x
 
 
