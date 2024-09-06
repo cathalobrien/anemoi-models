@@ -27,6 +27,8 @@ else:
 from anemoi.models.distributed.transformer import shard_heads
 from anemoi.models.distributed.transformer import shard_sequence
 
+import transformer_engine.pytorch as te
+
 LOGGER = logging.getLogger(__name__)
 
 
@@ -55,7 +57,7 @@ class MultiHeadSelfAttention(nn.Module):
         self.window_size = (window_size, window_size)  # flash attention
         self.is_causal = is_causal
 
-        self.lin_qkv = nn.Linear(embed_dim, 3 * embed_dim, bias=bias)
+        self.lin_qkv = te.Linear(embed_dim, 3 * embed_dim, bias=bias)
         self.attention = attn_func
 
         if not _FLASH_ATTENTION_AVAILABLE:
