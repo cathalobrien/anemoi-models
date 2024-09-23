@@ -11,9 +11,13 @@ import logging
 from typing import Optional
 
 import einops
+import torch
 from torch import Tensor
 from torch import nn
 from torch.distributed.distributed_c10d import ProcessGroup
+
+
+import os
 
 try:
     from flash_attn import flash_attn_func as attn_func
@@ -23,6 +27,13 @@ except ImportError:
     _FLASH_ATTENTION_AVAILABLE = False
 else:
     _FLASH_ATTENTION_AVAILABLE = True
+
+try:
+    from torch.nn.attention.flex_attention import flex_attention, create_block_mask
+except ImportError:
+    _FLEX_ATTENTION_AVAILIBLE = False
+else:
+    _FLEX_ATTENTION_AVAILIBLE = True
 
 from anemoi.models.distributed.transformer import shard_heads
 from anemoi.models.distributed.transformer import shard_sequence
@@ -58,6 +69,34 @@ class MultiHeadSelfAttention(nn.Module):
         self.lin_qkv = nn.Linear(embed_dim, 3 * embed_dim, bias=bias)
         self.attention = attn_func
 
+        precision="16-mixed"
+
+        if (os.environ.get("FLEX_ATTN", "0") == "1" and _FLEX_ATTENTION_AVAILIBLE):
+
+            if (self.head_dim < 64 and "16" in precision):
+                LOGGER.error(f"Error! {self.head_dim=}. head_dim (num_channels // num_heads) < 64 not supported in 16 bit precision during the BW pass. To use FlexAttn, increase the number of channels or lower the number of heads")
+                raise ValueError
+
+            LOGGER.info("Using Flex attn (CURRENTLY ONLY WORKS FOR FORWARD PASS)")
+            self.attention=flex_attention
+
+            #NotImplementedError: DDPOptimizer backend: Found a higher order op in the graph. This is not supported. Please turn off DDP optimizer using torch._dynamo.config.optimize_ddp=False. Note that this can cause performance degradation because there will be one bucket for the entire Dynamo graph. Please refer to this issue - https://github.com/pytorch/pytorch/issues/104674.
+            torch._dynamo.config.optimize_ddp=False
+
+            #Create the sliding window function and resulting block mask which flex Attn will use
+            def sliding_window(b, h, q_idx, kv_idx):
+                return torch.abs(q_idx - kv_idx) <= (window_size * 2)
+
+            # QUESTION: How to get this from the config?
+            seq_len=40320 #o96
+            #seq_len=5248 #o32
+            self.block_mask = create_block_mask(sliding_window, B=None, H=None, Q_LEN=seq_len, KV_LEN=seq_len, _compile=True)
+
+            #compile flexAttn (must be compiled for memory efficiency reasons, otherwise the entire seq_len^2 array is materialised in memory)
+            self.attention = torch.compile(self.attention, fullgraph=False, options={"trace.enabled": True})
+
+            #torch._dynamo.config.optimize_ddp=True
+
         if not _FLASH_ATTENTION_AVAILABLE:
             LOGGER.warning("Flash attention not available, falling back to pytorch scaled_dot_product_attention")
 
@@ -88,7 +127,10 @@ class MultiHeadSelfAttention(nn.Module):
         value = shard_heads(value, shapes=shapes, mgroup=model_comm_group)
         dropout_p = self.dropout_p if self.training else 0.0
 
-        if _FLASH_ATTENTION_AVAILABLE:
+        if (os.environ.get("FLEX_ATTN", "0") == "1" and _FLEX_ATTENTION_AVAILIBLE):
+            out = self.attention(query, key, value, block_mask=self.block_mask)
+
+        elif _FLASH_ATTENTION_AVAILABLE:
             query, key, value = (
                 einops.rearrange(t, "batch heads grid vars -> batch grid heads vars") for t in (query, key, value)
             )
