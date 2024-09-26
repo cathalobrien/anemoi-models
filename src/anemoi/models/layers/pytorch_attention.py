@@ -62,6 +62,58 @@ def slidingWindowAttn(query, key, value, window_size):
     # Return the final attention output
     return output
 
+def multiheadAttn(query, key, value, window_size):
+    # Inputs:
+    #   query  -> tensor of shape (batch_size, seq_len, nheads, head_dim)
+    #   key    -> tensor of shape (batch_size, seq_len, nheads, head_dim)
+    #   value  -> tensor of shape (batch_size, seq_len, nheads, head_dim)
+    #   window_size -> the size of the local sliding window
+    #
+    # Output:
+    #   output -> tensor of shape (batch_size, seq_len, nheads, head_dim)
+
+    # Get the dimensions
+    batch_size, seq_len, nheads, head_dim = query.shape
+
+    attn_output = torch.zeros(batch_size, seq_len, nheads, head_dim, dtype=torch.float16, device="cuda")
+
+    for head in range(nheads):
+        q = query[:, :, head, :]  # Shape: (batch_size, seq_len, head_dim)
+        k = key[:, :, head, :]
+        v = value[:, :, head, :]
+
+        single_head_attn = slidingWindowAttn(q, k, v, window_size)
+
+        attn_output[:, :, head, :] = single_head_attn
+
+    return attn_output
+
+def multiheadAttn2(query, key, value, window_size):
+    # Inputs:
+    #   query  -> tensor of shape (batch_size, seq_len, nheads, head_dim)
+    #   key    -> tensor of shape (batch_size, seq_len, nheads, head_dim)
+    #   value  -> tensor of shape (batch_size, seq_len, nheads, head_dim)
+    #   window_size -> the size of the local sliding window
+    #
+    # Output:
+    #   output -> tensor of shape (batch_size, seq_len, nheads, head_dim)
+
+    # Get the dimensions
+    batch_size, seq_len, nheads, head_dim = query.shape
+
+    # Reshape the input tensors to merge heads with batch size
+    query_reshaped = query.view(batch_size * nheads, seq_len, head_dim)
+    key_reshaped = key.view(batch_size * nheads, seq_len, head_dim)
+    value_reshaped = value.view(batch_size * nheads, seq_len, head_dim)
+
+    # Apply single head attention
+    attn_output_reshaped = slidingWindowAttn(query_reshaped, key_reshaped, value_reshaped, window_size)
+
+    # Reshape back to original format (batch_size, seq_len, nheads, head_dim)
+    attn_output = attn_output_reshaped.view(batch_size, seq_len, nheads, head_dim)
+
+    return attn_output
+
 
 #q = torch.arange(1, 9).reshape(4,2)
 #k = torch.arange(1, 13).reshape(6,2)
@@ -70,9 +122,9 @@ def slidingWindowAttn(query, key, value, window_size):
 #print(f"{q=},\n{k=},\n{kt=},\n{q_kt=}") #,\n{q_k=}")
 
 #batch size, seq len, num_heads(1), embedding size
-q = torch.randn(1, 8, 64, dtype=torch.float16, device="cuda")
-k = torch.randn(1, 8, 64, dtype=torch.float16, device="cuda")
-v = torch.randn(1, 8, 64, dtype=torch.float16, device="cuda")
+q = torch.randn(1, 8, 2, 64, dtype=torch.float16, device="cuda")
+k = torch.randn(1, 8, 2, 64, dtype=torch.float16, device="cuda")
+v = torch.randn(1, 8, 2, 64, dtype=torch.float16, device="cuda")
 w = 2
 
 
@@ -83,10 +135,10 @@ print(f"setup: {w=}, \n{q.shape=} \n")
 #k = torch.randn(1, 16, 8, 768)
 #v = torch.randn(1, 16, 8, 768)
 
-pytorch_attn_out = slidingWindowAttn(q,k,v,w)
+pytorch_attn_out = multiheadAttn(q,k,v,w)
 #pytorch_attn_out = torch.einsum('btsd -> bst d', pytorch_attn_out) #go from [1, 1, 8, 64] to [1, 8, 1, 64]
 print(f"{pytorch_attn_out.shape=}")
-print(f"{pytorch_attn_out[0][0]=}")
+print(f"{pytorch_attn_out[0][0][0]=}")
 #print(f"{pytorch_attn_out=}")
 
 #change shape from i.e. (1, 8, 768) to (1, 8, 1, 768)
@@ -97,12 +149,14 @@ print(f"{pytorch_attn_out[0][0]=}")
 #    einops.rearrange(t, "batch heads grid vars -> batch grid heads vars") for t in (query, key, value)
 #)
 window_size=(w,w) #TODO make this safe
-flash_attn_out = flash_attn_func(q.unsqueeze(2), k.unsqueeze(2), v.unsqueeze(2), causal=False, window_size=window_size, dropout_p=0.0)
+flash_attn_out = flash_attn_func(q, k, v, causal=False, window_size=window_size, dropout_p=0.0)
 print(f"{flash_attn_out.shape=}") #flash_attn_out.shape=torch.Size([1, 8, 1, 64])
-print(f"{flash_attn_out[0][0]=}")
+print(f"{flash_attn_out[0][0][0]=}")
 #flash_attn_out = einops.rearrange(flash_attn_out, "batch grid heads vars -> batch heads grid vars")
 
 if (w == -1):
+    print("Need to convert from Flash attn format to torch sdpa format")
+    raise ValueError
     sdpa_attn_out = scaled_dot_product_attention(q.unsqueeze(1), k.unsqueeze(1), v.unsqueeze(1), is_causal=False, dropout_p=0.0,)  # expects (batch heads grid variable) format
     sdpa_attn_out = torch.einsum('btsd -> bst d', sdpa_attn_out)
     print(f"{sdpa_attn_out.shape=}")
@@ -117,7 +171,7 @@ if (w == -1):
 else:
     print("Sliding window not supported in Pytorch SDPA")
 
-are_close = torch.allclose(pytorch_attn_out.unsqueeze(2), flash_attn_out,
+are_close = torch.allclose(pytorch_attn_out, flash_attn_out,
         atol=1e-3, rtol=1e-2)
 if are_close:
     print("pytorch_attn_out and flash_attn_out are numerically close.")
