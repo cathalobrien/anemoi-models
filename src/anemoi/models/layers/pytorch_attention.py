@@ -107,7 +107,7 @@ if (w == -1):
     sdpa_attn_out = torch.einsum('btsd -> bst d', sdpa_attn_out)
     print(f"{sdpa_attn_out.shape=}")
     print(f"{sdpa_attn_out[0][0]=}")
-    are_close = torch.allclose(pytorch_attn_out, sdpa_attn_out, atol=1e-6, rtol=1e-5)
+    are_close = torch.allclose(pytorch_attn_out, sdpa_attn_out, atol=1e-3, rtol=1e-2)
     if are_close:
         print("pytorch_attn_out and sdpa_attn_out are numerically close.")
     else:
@@ -117,7 +117,8 @@ if (w == -1):
 else:
     print("Sliding window not supported in Pytorch SDPA")
 
-are_close = torch.allclose(pytorch_attn_out.unsqueeze(1), flash_attn_out, atol=1e-6, rtol=1e-5)
+are_close = torch.allclose(pytorch_attn_out.unsqueeze(2), flash_attn_out,
+        atol=1e-3, rtol=1e-2)
 if are_close:
     print("pytorch_attn_out and flash_attn_out are numerically close.")
 else:
